@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#12372a">
+  <meta name="description" content="智能窗帘远程控制">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <title>智能窗帘控制</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;color:#eef7f1;background:#091a14}
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:radial-gradient(circle at 85% 5%,#28684d 0,transparent 35%),linear-gradient(155deg,#0d2b20,#07130f);padding:env(safe-area-inset-top) 18px env(safe-area-inset-bottom)}
+    main{max-width:520px;margin:0 auto;padding:28px 0 36px}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:26px}
+    h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}.sub{margin:0;color:#a9c5b5;font-size:.95rem}.status{display:flex;align-items:center;gap:8px;background:#102e23;border:1px solid #28513f;border-radius:999px;padding:8px 12px;font-size:.88rem;white-space:nowrap}.dot{width:9px;height:9px;border-radius:50%;background:#e3a338;box-shadow:0 0 0 4px #e3a33822}.online .dot{background:#55d98b;box-shadow:0 0 0 4px #55d98b22}.offline .dot{background:#e56f6f}
+    .panel{background:#10271fdd;border:1px solid #28513f;border-radius:24px;padding:20px;box-shadow:0 20px 60px #0007}.readout{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px}.readout div{background:#0a1d16;border-radius:16px;padding:14px}.label{display:block;color:#86a896;font-size:.78rem;margin-bottom:6px}.value{font-size:1rem;font-weight:650}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}button{min-height:78px;border:0;border-radius:18px;background:#e5f3e9;color:#12372a;font:inherit;font-size:1.08rem;font-weight:720;box-shadow:inset 0 -3px 0 #b5d3c0;touch-action:manipulation}button:active{transform:translateY(2px);box-shadow:none}button.secondary{background:#b9dbc5}button.stop{background:#e4675f;color:white;box-shadow:inset 0 -3px 0 #a43c36}button:disabled{opacity:.45;transform:none}.wide{grid-column:1/-1}
+    .foot{color:#86a896;font-size:.78rem;line-height:1.55;margin:18px 6px 0}.toast{position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom));transform:translate(-50%,20px);background:#f0f7f2;color:#12372a;border-radius:999px;padding:10px 16px;opacity:0;transition:.2s;pointer-events:none;box-shadow:0 8px 30px #0008}.toast.show{opacity:1;transform:translate(-50%,0)}
+  </style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div><h1>智能窗帘</h1><p class="sub">远程控制面板</p></div>
+    <div id="status" class="status"><span class="dot"></span><span id="statusText">正在连接</span></div>
+  </div>
+  <section class="panel" aria-label="窗帘控制">
+    <div class="readout">
+      <div><span class="label">设备回应</span><span id="deviceState" class="value">等待设备</span></div>
+      <div><span class="label">最近操作</span><span id="lastAction" class="value">暂无</span></div>
+    </div>
+    <div class="grid">
+      <button data-code="1" data-name="全开">全开 100%</button>
+      <button data-code="2" data-name="全关">全关 0%</button>
+      <button data-code="3" data-name="打开一半">打开一半 50%</button>
+      <button data-code="4" data-name="停止" class="stop">立即停止</button>
+      <button data-code="5" data-name="自动模式" class="secondary">自动模式</button>
+      <button data-code="6" data-name="手动模式" class="secondary">手动模式</button>
+    </div>
+    <p class="foot">页面通过公共MQTT测试服务发送单字节命令，仅用于本项目功能演示。设备离线时按钮会自动停用。</p>
+  </section>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
+<script>
+(() => {
+  const broker = 'wss://broker.emqx.io:8084/mqtt';
+  const commandTopic = 'ct107d/a7c94e31/cmd';
+  const stateTopic = 'ct107d/a7c94e31/state';
+  const status = document.querySelector('#status');
+  const statusText = document.querySelector('#statusText');
+  const deviceState = document.querySelector('#deviceState');
+  const lastAction = document.querySelector('#lastAction');
+  const buttons = [...document.querySelectorAll('button[data-code]')];
+  const toast = document.querySelector('#toast');
+  let toastTimer;
+  let responseTimer;
+  const setEnabled = enabled => buttons.forEach(b => b.disabled = !enabled);
+  const notify = text => { toast.textContent = text; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 1600); };
+  setEnabled(false);
+  const client = mqtt.connect(broker, {
+    protocolVersion: 4,
+    clean: true,
+    reconnectPeriod: 2500,
+    connectTimeout: 8000,
+    clientId: 'curtain_app_' + Math.random().toString(16).slice(2, 10)
+  });
+  client.on('connect', () => {
+    status.className = 'status online'; statusText.textContent = '页面已联网'; setEnabled(true);
+    client.subscribe(stateTopic, {qos: 0});
+  });
+  client.on('reconnect', () => { status.className = 'status'; statusText.textContent = '正在重连'; setEnabled(false); });
+  client.on('offline', () => { status.className = 'status offline'; statusText.textContent = '网络离线'; setEnabled(false); });
+  client.on('error', () => { status.className = 'status offline'; statusText.textContent = '连接失败'; setEnabled(false); });
+  client.on('message', (topic, payload, packet) => {
+    if (topic === stateTopic) {
+      clearTimeout(responseTimer);
+      const value = payload.toString().slice(0, 24);
+      deviceState.textContent = packet && packet.retain ? value + '（上次状态）' : value;
+    }
+  });
+  buttons.forEach(button => button.addEventListener('click', () => {
+    if (!client.connected) return notify('云端尚未连接');
+    clearTimeout(responseTimer);
+    deviceState.textContent = '等待设备回应…';
+    client.publish(commandTopic, button.dataset.code, {qos: 0, retain: false}, err => {
+      if (err) return notify('发送失败，请重试');
+      lastAction.textContent = button.dataset.name;
+      notify('已发送：' + button.dataset.name);
+      responseTimer = setTimeout(() => { deviceState.textContent = '设备未回应'; }, 6000);
+    });
+  }));
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+})();
+</script>
+</body>
+</html>
+
