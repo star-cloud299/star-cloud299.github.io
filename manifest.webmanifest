@@ -1,0 +1,10 @@
+{
+  "name": "智能窗帘控制",
+  "short_name": "智能窗帘",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#091a14",
+  "theme_color": "#12372a",
+  "icons": [{"src":"icons/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
+
